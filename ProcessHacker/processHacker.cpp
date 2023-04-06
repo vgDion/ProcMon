@@ -160,6 +160,92 @@ bool ProcessHacker::setPrivelege(Handle& hToken, const LPCTSTR lpszPrivilege, co
 }
 
 
+//functions for integrity level interaction (implementation)
+decltype(SECURITY_MANDATORY_MEDIUM_RID) ProcessHacker::getIntegrityLevelImpl(const std::wstring& filename)
+{
+	DWORD integrityLevel;
+	PSECURITY_DESCRIPTOR pSDtemp = nullptr;
+	PACL sacl = nullptr;
+	//get SACL security descriptor
+	auto error = GetNamedSecurityInfo(&filename[0], SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+		0, 0, 0, &sacl, &pSDtemp);
+	//make unique_ptr for RAII
+	std::unique_ptr<PSECURITY_DESCRIPTOR, LocalFreeDeleter> pSD(&pSDtemp);
+
+	if (error != ERROR_SUCCESS)
+	{
+		if (error == ERROR_FILE_NOT_FOUND)
+			throw std::invalid_argument("File with such name doesn't exist");
+		else
+			throw std::runtime_error(std::string("GetNamedSecurityInfo failed with error " + std::to_string(error)));
+	}
+
+	//first ACE contains SID that includes integrity level
+	if (sacl != nullptr && sacl->AceCount > 0)
+	{
+		SYSTEM_MANDATORY_LABEL_ACE* ace = 0;
+		if (!GetAce(sacl, 0, (LPVOID*)&ace))
+			throw std::runtime_error("GetAce failed");
+
+		SID* sid = reinterpret_cast<SID*>(&ace->SidStart);
+		integrityLevel = sid->SubAuthority[0];
+	}
+	else
+		integrityLevel = SECURITY_MANDATORY_MEDIUM_RID; //SACL doesn't exist, integrity level is default
+
+	return integrityLevel;
+}
+void ProcessHacker::setIntegrityLevelImpl(const decltype(SECURITY_MANDATORY_MEDIUM_RID) integrityLevel, const std::wstring& filename)
+{
+
+	//SDDL-style security descriptor initialization
+	LPCWSTR INTEGRITY_SDDL_SACL_W;
+	if (integrityLevel == SECURITY_MANDATORY_LOW_RID)
+		INTEGRITY_SDDL_SACL_W = L"S:(ML;;NR;;;LW)";
+	else if (integrityLevel == SECURITY_MANDATORY_MEDIUM_RID)
+		INTEGRITY_SDDL_SACL_W = L"S:(ML;;NR;;;ME)";
+	else if (integrityLevel == SECURITY_MANDATORY_HIGH_RID)
+		INTEGRITY_SDDL_SACL_W = L"S:(ML;;NR;;;HI)";
+	else if (integrityLevel == SECURITY_MANDATORY_UNTRUSTED_RID ||
+		integrityLevel == SECURITY_MANDATORY_SYSTEM_RID)
+		throw std::invalid_argument("Can't set Untrusted or System integrity level");
+	else
+		throw std::invalid_argument("Invalid integrity level");
+
+	DWORD error;
+	PSECURITY_DESCRIPTOR pSDtemp = nullptr;
+
+	PACL pSacl = nullptr;
+	BOOL fSaclPresent = FALSE;
+	BOOL fSaclDefaulted = FALSE;
+	//convert SDDL security descriptor to structure
+	auto returnCode = ConvertStringSecurityDescriptorToSecurityDescriptor(
+		INTEGRITY_SDDL_SACL_W, SDDL_REVISION_1, &pSDtemp, NULL);
+
+	std::unique_ptr<PSECURITY_DESCRIPTOR, LocalFreeDeleter> pSD(&pSDtemp);//make unique_ptr for RAII
+
+	if (returnCode == 0)
+		throw std::runtime_error("ConvertStringSecurityDescriptorToSecurityDescriptor failed");
+
+	if (!GetSecurityDescriptorSacl(*pSD, &fSaclPresent, &pSacl, &fSaclDefaulted))
+		throw std::runtime_error("GetSecurityDescriptorSacl failed");
+
+	error = SetNamedSecurityInfo((LPWSTR)&filename[0],
+		SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+		NULL, NULL, NULL, pSacl);
+
+	if (error != ERROR_SUCCESS)
+	{
+		if (error == ERROR_FILE_NOT_FOUND)
+			throw std::invalid_argument("File with such name doesn't exist");
+		else
+			throw std::runtime_error(std::string("SetNamedSecurityInfo failed with error " + std::to_string(error)));
+	}
+
+}
+
+
+
 //three functions that get info from PROCESSENTRY32 structure
 std::wstring ProcessHacker::getProcessName(PROCESSENTRY32& pe32)
 {
@@ -169,6 +255,11 @@ DWORD ProcessHacker::getPID(PROCESSENTRY32& pe32)
 {
 	return pe32.th32ProcessID;
 }
+DWORD ProcessHacker::getParentPID(PROCESSENTRY32& pe32)
+{
+	return pe32.th32ParentProcessID;
+}
+
 
 std::unordered_map<DWORD, std::shared_ptr<Process>> ProcessHacker::getProcessMap()
 {
