@@ -77,9 +77,24 @@ private:
 	//function that needs valid token with TOKEN_ADJUST_PRIVILEGES, return TRUE if privilege was adjusted, else FALSE
 	bool setPrivelege(Handle& hToken, const LPCTSTR lpszPrivilege, const BOOL bEnablePrivilege);
 
+	//functions for integrity level interaction
+	decltype(SECURITY_MANDATORY_MEDIUM_RID) getIntegrityLevelImpl(const std::wstring& filename);
+	void setIntegrityLevelImpl(const decltype(SECURITY_MANDATORY_MEDIUM_RID) integrityLevel, const std::wstring& filename);
+
 	//three functions that get info from PROCESSENTRY32 structure
 	std::wstring getProcessName(PROCESSENTRY32& pe32);
 	DWORD getPID(PROCESSENTRY32& pe32);
+	DWORD getParentPID(PROCESSENTRY32& pe32);
+
+	//functions that need VALID handle with access rights
+	bool isWow64(Handle& hProcess);
+	std::wstring getProcessName(Handle& hProcess);
+	std::wstring getExePath(Handle& hProcess);
+	Process::ProcessType getProcessType(Handle& hProcess);
+	std::pair<std::wstring, std::wstring> getSidAndOwnerName(Handle& hProcess);
+	std::wstring getDepPolicy(Handle& hProcess);
+	std::wstring getAslrPolicy(Handle& hProcess);
+	std::vector<std::wstring> getProcessDlls(Handle& hProcess);
 };
 
 //helper class to implement RAII for handles
